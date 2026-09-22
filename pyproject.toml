@@ -1,7 +1,20 @@
 [project]
 name = "my-coding-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "A minimal coding agent with an explicit model-tool loop"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "openai>=3.17.0",
+    "python-dotenv>=1.2.3",
+]
+
+[project.scripts]
+my-agent = "agentcore.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.27,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "agentcore"
