@@ -1,8 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
+from subprocess import CompletedProcess, TimeoutExpired
 from unittest.mock import patch
-from subprocess import CompletedProcess
 
 from agentcore.tools import default_tools
 from agentcore.workspace import Workspace
@@ -26,6 +26,8 @@ class ToolTests(unittest.TestCase):
         self.assertFalse(self.tools.dispatch("read_file", {"path": str(self.root / "notes.txt")}).ok)
         (self.root / "outside").symlink_to(self.root.parent, target_is_directory=True)
         self.assertFalse(self.tools.dispatch("write_file", {"path": "outside/escape.txt", "content": "no"}).ok)
+        self.assertFalse(self.tools.dispatch("search", {"pattern": "x", "path": "outside"}).ok)
+        self.assertFalse(self.tools.dispatch("git_diff", {"path": "../outside"}).ok)
 
     def test_shell_success_and_nonzero(self) -> None:
         success = self.tools.dispatch("shell", {"command": "pwd"})
@@ -37,6 +39,12 @@ class ToolTests(unittest.TestCase):
         self.assertFalse(failure.ok)
         self.assertEqual(failure.stderr, "problem")
         self.assertEqual(failure.exit_code, 7)
+
+    def test_shell_timeout_is_tool_failure(self) -> None:
+        with patch("agentcore.tools.subprocess.run", side_effect=TimeoutExpired("slow", 1)):
+            result = self.tools.dispatch("shell", {"command": "slow"})
+        self.assertFalse(result.ok)
+        self.assertIn("TimeoutExpired", result.error)
 
     def test_unknown_tool_and_invalid_arguments(self) -> None:
         self.assertFalse(self.tools.dispatch("missing", {}).ok)

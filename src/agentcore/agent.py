@@ -6,6 +6,7 @@ from typing import Callable, Literal
 
 from agentcore.messages import Message, ToolCall
 from agentcore.model import Model, ModelResponse
+from agentcore.task_state import TaskState
 from agentcore.tools import ToolRegistry, ToolResult
 from agentcore.workspace import Workspace
 
@@ -16,7 +17,8 @@ class RunResult:
     final_answer: str | None
     steps: int
     messages: tuple[Message, ...]
-    error: str | None = None
+    error: str | None
+    state: TaskState
 
 
 @dataclass(frozen=True)
@@ -50,14 +52,16 @@ class Agent:
             Message(role="system", content=f"You are a coding agent working in {self.workspace.root}. Use available tools when needed."),
             Message(role="user", content=task),
         ]
+        state = TaskState(goal=task)
         for step in range(1, self.max_steps + 1):
+            state = state.at_step(step)
             emit(AgentEvent("step", step))
             try:
                 response = self.model.complete(messages.copy(), self.tools.schemas())
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 emit(AgentEvent("error", step, text=error))
-                return RunResult("provider_error", None, step, tuple(messages), error)
+                return RunResult("provider_error", None, step, tuple(messages), error, state.finish("provider_error", error))
 
             emit(AgentEvent("model", step, response=response))
             messages.append(Message(
@@ -70,18 +74,19 @@ class Agent:
             if response.status != "completed":
                 error = f"Model response status: {response.status}"
                 emit(AgentEvent("error", step, text=error))
-                return RunResult("provider_error", None, step, tuple(messages), error)
+                return RunResult("provider_error", None, step, tuple(messages), error, state.finish("provider_error", error))
             if not response.tool_calls:
                 if response.text.strip():
                     emit(AgentEvent("final", step, text=response.text))
-                    return RunResult("completed", response.text, step, tuple(messages))
+                    return RunResult("completed", response.text, step, tuple(messages), None, state.finish("completed"))
                 error = "Model returned no answer or tool calls"
                 emit(AgentEvent("error", step, text=error))
-                return RunResult("provider_error", None, step, tuple(messages), error)
+                return RunResult("provider_error", None, step, tuple(messages), error, state.finish("provider_error", error))
 
             for call in response.tool_calls:
                 emit(AgentEvent("tool_call", step, call=call))
                 result = self.tools.dispatch(call.name, call.arguments)
+                state = state.after_tool(call, result)
                 emit(AgentEvent("tool_result", step, call=call, result=result))
                 messages.append(Message(
                     role="tool",
@@ -91,4 +96,4 @@ class Agent:
 
         error = "Maximum model steps reached"
         emit(AgentEvent("error", self.max_steps, text=error))
-        return RunResult("max_steps", None, self.max_steps, tuple(messages), error)
+        return RunResult("max_steps", None, self.max_steps, tuple(messages), error, state.finish("max_steps", error))

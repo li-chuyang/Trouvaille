@@ -30,6 +30,7 @@ def save_trajectory(task: str, workspace_root: Path, result: RunResult) -> Path:
         "workspace": str(workspace_root),
         "status": result.status,
         "model_calls": result.steps,
+        "task_state": asdict(result.state),
         "steps": steps,
         "final_answer": result.final_answer,
         "error": result.error,

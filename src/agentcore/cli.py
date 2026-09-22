@@ -8,6 +8,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from agentcore.agent import Agent, AgentEvent
+from agentcore.config import AppConfig
 from agentcore.model import ModelConfig, OpenAIModel
 from agentcore.tools import default_tools
 from agentcore.trajectory import save_trajectory
@@ -51,7 +52,8 @@ def main() -> int:
 
     load_dotenv(Path.cwd() / ".env")
     try:
-        workspace = Workspace(args.workspace)
+        app_config = AppConfig(workspace_root=args.workspace)
+        workspace = Workspace(app_config.workspace_root)
     except (ValueError, OSError) as exc:
         print(f"Error > {exc}")
         return 2
