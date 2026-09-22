@@ -5,10 +5,16 @@ import os
 from pathlib import Path
 from typing import Any
 
+try:
+    import readline  # Enables Unicode-aware editing for input() on macOS/libedit.
+except ImportError:
+    pass  # readline is optional on some platforms.
+
 from dotenv import load_dotenv
 
 from agentcore.agent import Agent, AgentEvent
 from agentcore.config import AppConfig
+from agentcore.conversation import Conversation
 from agentcore.model import ModelConfig, OpenAIModel
 from agentcore.tools import default_tools
 from agentcore.trajectory import save_trajectory
@@ -63,12 +69,13 @@ def main() -> int:
     try:
         config = ModelConfig.from_env()
         agent = Agent(OpenAIModel(config), default_tools(workspace), workspace, max_steps=args.max_steps)
+        conversation = Conversation(agent)
     except (ValueError, OSError) as exc:
         print(f"Error > {exc}")
         return 2
 
     def run_task(task: str) -> int:
-        result = agent.run(task, on_event=_show_event)
+        result = conversation.run(task, on_event=_show_event)
         if result.status == "completed":
             print(f"Agent > {result.final_answer}")
         else:

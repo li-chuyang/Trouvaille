@@ -17,3 +17,9 @@ wheels/
 
 # Temporary demo workspaces
 .demo-run-*/
+
+# Local demos, tests, and phase task notes
+demo/
+demo_workspace/
+tests/
+tasks/
