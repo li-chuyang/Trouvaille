@@ -6,10 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from agentcore.agent import RunResult
+from trouvaille.agent import RunResult
+from trouvaille.workspace import Workspace
 
 
-def save_trajectory(task: str, workspace_root: Path, result: RunResult) -> Path:
+def save_trajectory(task: str, workspace: Workspace, result: RunResult) -> Path:
     steps: list[dict] = []
     for message in result.messages:
         if message.role == "assistant":
@@ -27,7 +28,7 @@ def save_trajectory(task: str, workspace_root: Path, result: RunResult) -> Path:
 
     record = {
         "task": task,
-        "workspace": str(workspace_root),
+        "workspace": str(workspace.root),
         "status": result.status,
         "model_calls": result.steps,
         "task_state": asdict(result.state),
@@ -35,7 +36,7 @@ def save_trajectory(task: str, workspace_root: Path, result: RunResult) -> Path:
         "final_answer": result.final_answer,
         "error": result.error,
     }
-    directory = workspace_root / ".agentcore" / "trajectories"
+    directory = workspace.internal_path("trajectories")
     directory.mkdir(parents=True, exist_ok=True)
     filename = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{uuid4().hex[:8]}.json"
     path = directory / filename

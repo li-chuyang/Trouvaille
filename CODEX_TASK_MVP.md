@@ -77,7 +77,7 @@ Final Answer
 至少支持：
 
 ```bash
-my-agent
+trouvaille
 ```
 
 进入交互模式。

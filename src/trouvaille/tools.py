@@ -1,10 +1,11 @@
 """Minimal tool registry and workspace-bound tools."""
 
-import subprocess
 from dataclasses import dataclass
+from subprocess import TimeoutExpired
 from typing import Any, Callable
 
-from agentcore.workspace import Workspace
+from trouvaille.execution import ExecutionBackend, LocalExecutionBackend
+from trouvaille.workspace import AgentWorkspaceView, Workspace
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,7 @@ class ToolRegistry:
         try:
             _validate(arguments, tool.parameters)
             return tool.run(**arguments)
-        except (OSError, ValueError, TypeError, UnicodeError, subprocess.TimeoutExpired) as exc:
+        except (OSError, ValueError, TypeError, UnicodeError, TimeoutExpired) as exc:
             return ToolResult(name=name, ok=False, error=f"{type(exc).__name__}: {exc}")
 
 
@@ -72,29 +73,33 @@ def _parameters(required: tuple[str, ...], optional: tuple[str, ...] = ()) -> di
     }
 
 
-def default_tools(workspace: Workspace, *, shell_timeout: int = 30) -> ToolRegistry:
+def default_tools(
+    workspace: Workspace,
+    *,
+    shell_timeout: int = 30,
+    execution_backend: ExecutionBackend | None = None,
+) -> ToolRegistry:
     if shell_timeout <= 0:
         raise ValueError("shell_timeout must be positive")
+    agent_workspace = AgentWorkspaceView(workspace)
+    backend = execution_backend if execution_backend is not None else LocalExecutionBackend()
 
     def list_files(path: str = ".") -> ToolResult:
-        target = workspace.resolve(path)
-        if not target.is_dir():
-            raise ValueError(f"Not a directory: {path}")
-        names = [entry.name + ("/" if entry.is_dir() else "") for entry in target.iterdir()]
+        names = [entry.name + ("/" if entry.is_dir() else "") for entry in agent_workspace.iterdir(path)]
         return ToolResult(name="list_files", ok=True, output="\n".join(sorted(names)))
 
     def read_file(path: str) -> ToolResult:
-        target = workspace.resolve(path)
+        target = agent_workspace.resolve(path)
         return ToolResult(name="read_file", ok=True, output=target.read_text(encoding="utf-8"))
 
     def write_file(path: str, content: str) -> ToolResult:
-        target = workspace.resolve(path)
+        target = agent_workspace.resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return ToolResult(name="write_file", ok=True, output=f"Wrote {path}")
 
     def edit_file(path: str, old_text: str, new_text: str) -> ToolResult:
-        target = workspace.resolve(path)
+        target = agent_workspace.resolve(path)
         content = target.read_text(encoding="utf-8")
         count = content.count(old_text)
         if not old_text or count != 1:
@@ -103,66 +108,54 @@ def default_tools(workspace: Workspace, *, shell_timeout: int = 30) -> ToolRegis
         return ToolResult(name="edit_file", ok=True, output=f"Edited {path}")
 
     def search(pattern: str, path: str = ".") -> ToolResult:
-        target = workspace.resolve(path)
-        if not target.exists():
-            raise ValueError(f"Path does not exist: {path}")
-        files = [target] if target.is_file() else target.rglob("*")
         matches: list[str] = []
-        for file in files:
-            if not file.is_file() or not file.resolve().is_relative_to(workspace.root):
-                continue
-            if any(part in {".git", ".venv"} for part in file.relative_to(workspace.root).parts):
-                continue
+        for file in agent_workspace.iter_files(
+            path,
+            excluded_directories=frozenset({".git", ".venv"}),
+        ):
             try:
                 lines = file.read_text(encoding="utf-8").splitlines()
             except (UnicodeError, OSError):
                 continue
             for number, line in enumerate(lines, 1):
                 if pattern in line:
-                    matches.append(f"{file.relative_to(workspace.root)}:{number}:{line}")
+                    matches.append(f"{file.relative_to(agent_workspace.root)}:{number}:{line}")
         return ToolResult(name="search", ok=True, output="\n".join(matches))
 
     def shell(command: str) -> ToolResult:
-        completed = subprocess.run(
+        completed = backend.run(
             command,
-            shell=True,
             cwd=workspace.root,
-            capture_output=True,
-            text=True,
-            errors="replace",
             timeout=shell_timeout,
-            check=False,
+            shell=True,
         )
         return ToolResult(
             name="shell",
-            ok=completed.returncode == 0,
+            ok=completed.exit_code == 0,
             stdout=completed.stdout,
             stderr=completed.stderr,
-            exit_code=completed.returncode,
+            exit_code=completed.exit_code,
             output=completed.stdout + completed.stderr,
-            error=None if completed.returncode == 0 else f"Exit code: {completed.returncode}",
+            error=None if completed.exit_code == 0 else f"Exit code: {completed.exit_code}",
         )
 
     def git_diff(path: str = ".") -> ToolResult:
-        target = workspace.resolve(path)
+        target = agent_workspace.resolve(path)
         relative = target.relative_to(workspace.root)
-        completed = subprocess.run(
+        completed = backend.run(
             ["git", "diff", "--no-ext-diff", "--", str(relative)],
             cwd=workspace.root,
-            capture_output=True,
-            text=True,
-            errors="replace",
             timeout=shell_timeout,
-            check=False,
+            shell=False,
         )
         return ToolResult(
             name="git_diff",
-            ok=completed.returncode == 0,
+            ok=completed.exit_code == 0,
             output=completed.stdout + completed.stderr,
             stdout=completed.stdout,
             stderr=completed.stderr,
-            exit_code=completed.returncode,
-            error=None if completed.returncode == 0 else f"Exit code: {completed.returncode}",
+            exit_code=completed.exit_code,
+            error=None if completed.exit_code == 0 else f"Exit code: {completed.exit_code}",
         )
 
     return ToolRegistry([

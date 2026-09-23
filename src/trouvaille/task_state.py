@@ -3,11 +3,11 @@
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from agentcore.messages import ToolCall
-from agentcore.tools import ToolResult
+from trouvaille.messages import ToolCall
+from trouvaille.tools import ToolResult
 
 
-TaskStatus = Literal["running", "completed", "max_steps", "provider_error"]
+TaskStatus = Literal["running", "completed", "max_steps", "provider_error", "lifecycle_error"]
 
 
 @dataclass(frozen=True)

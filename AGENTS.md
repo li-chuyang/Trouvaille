@@ -68,7 +68,7 @@ uv run ...
 cd my_coding_agent
 uv run python --version
 uv run pytest
-uv run my-agent
+uv run trouvaille
 ```
 
 如果从 workspace root 执行，则显式指定：

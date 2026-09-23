@@ -1,5 +1,5 @@
 [project]
-name = "my-coding-agent"
+name = "trouvaille"
 version = "0.1.0"
 description = "A minimal coding agent with an explicit model-tool loop"
 readme = "README.md"
@@ -10,11 +10,11 @@ dependencies = [
 ]
 
 [project.scripts]
-my-agent = "agentcore.cli:main"
+trouvaille = "trouvaille.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.9.27,<0.10.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "agentcore"
+module-name = "trouvaille"

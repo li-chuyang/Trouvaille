@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 from openai import OpenAI
 
-from agentcore.messages import Message, ToolCall
+from trouvaille.messages import Message, ToolCall
 
 
 @dataclass(frozen=True)

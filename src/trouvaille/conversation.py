@@ -1,15 +1,17 @@
 """In-memory message history shared by Runs in one live conversation."""
 
-from typing import Callable
+from typing import Callable, Sequence
 
-from agentcore.agent import Agent, AgentEvent, RunResult
-from agentcore.messages import Message
+from trouvaille.agent import Agent, AgentEvent, RunResult
+from trouvaille.messages import Message
 
 
 class Conversation:
-    def __init__(self, agent: Agent) -> None:
+    def __init__(self, agent: Agent, *, history: Sequence[Message] = ()) -> None:
+        if any(message.role == "system" for message in history):
+            raise ValueError("Conversation history must not contain system messages")
         self.agent = agent
-        self._history: tuple[Message, ...] = ()
+        self._history = tuple(history)
 
     @property
     def history(self) -> tuple[Message, ...]:
