@@ -1,102 +1,234 @@
-# Trouvaille
+<p align="center">
+  <img src="docs/assets/trouvaille-logo.svg" width="680" alt="Trouvaille">
+</p>
 
-一个最小但完整的 CLI Coding Agent MVP。用户给出任务后，项目自己的 Agent Loop 调用模型、执行本地工具、把结果交回模型，直到得到回答或达到步数上限。
+<p align="center">
+  一个核心流程透明、可以持续扩展的本地 CLI Coding Agent。
+</p>
 
-## 为什么自己实现 Agent Core
+<p align="center">
+  <img alt="Python 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white">
+  <img alt="uv" src="https://img.shields.io/badge/package_manager-uv-DE5FE9?logo=uv&logoColor=white">
+  <img alt="OpenAI" src="https://img.shields.io/badge/provider-OpenAI-412991?logo=openai&logoColor=white">
+  <img alt="Status: MVP" src="https://img.shields.io/badge/status-MVP-22A06B">
+</p>
 
-项目的目标是能看清并解释每一步：模型何时被调用、工具如何分发、结果怎样回填、何时停止。因此核心循环在本项目中显式实现；OpenAI SDK 只负责模型请求，没有使用外部 Agent runtime。
+---
 
-## 架构
+Trouvaille 接收自然语言任务，自主查看和修改代码、运行命令、验证结果，并在终端中清晰展示每一步。项目显式实现了 Agent Loop、消息流、工具调度和停止条件，OpenAI SDK 仅用于模型请求，没有依赖 LangGraph 或 LangChain Agent runtime。
 
-```text
-CLI → Conversation → Agent Loop + Lifecycle Hooks → Context Manager → Model interface → OpenAI Responses API
-        ↕
-    SessionStore → .agentcore/sessions/
-                      ↓
-                   Tool registry → Workspace → 文件 / shell / Git
-                      ↓
-                   Tool result → Messages → 下一次模型调用
-                      ↓
-                   Task State（本次任务的操作事实）
-                      ↓
-                   JSON trajectory
-```
+> 当前处于 MVP 阶段，适合学习 Coding Agent 的组成方式、研究 Agent Loop，或在受信任的本地代码仓库中进行实验。
 
-`conversation.py` 在一次 CLI 启动期间保存完整对话消息；`session.py` 将 raw conversation history 持久化到当前 workspace；`agent.py` 负责一次用户请求的循环和停止条件；`lifecycle.py` 提供同步生命周期扩展点；`context.py` 通过 `before_model` 测量临时上下文、缩减大型工具结果并摘要较旧的完整 Run；`messages.py` 定义项目内部消息及 Session codec；`model.py` 把内部消息转换成 OpenAI 请求，并将响应归一化；`tools.py` 提供工具定义与分发；`workspace.py` 管理文件路径；`task_state.py` 记录本次任务操作事实；`cli.py` 处理输入和展示；`trajectory.py` 保存运行记录。每次 CLI 输入仍是独立的 Run，Task State 每次重置；同一次交互启动和显式恢复的后续 Run 会看到前面 Run 的 user、assistant 和工具消息。
+## 功能亮点
 
-Lifecycle Hook 按注册顺序同步执行。一次工具步骤的顺序是 `before_model → model → after_model → before_tool → tool（或明确阻止）→ after_tool`，Run 结束时执行一次 `after_run`。`before_model` 只变换本次模型调用的临时消息视图，不改写原始 Conversation；`before_tool` 可以产生正常的失败 `ToolResult` 来阻止底层工具。`AgentEvent / on_event` 继续负责 CLI/UI 观察通知，Lifecycle Hook 则是可以参与执行决策的扩展点。
+- **自主编码循环**：模型调用、工具执行、结果回填和停止条件都由项目自己的 Agent Loop 控制。
+- **连续对话与 Session**：同一次启动内共享完整消息历史，也可以跨进程恢复 workspace 中保存的会话。
+- **Repository Intelligence**：安全发现仓库文件，使用 Python AST 建立索引，并按当前任务生成有界的 repo map。
+- **上下文管理**：针对每次模型调用生成临时上下文，压缩大型工具结果并摘要较旧的完整 Run。
+- **完成前验证**：修改文件后，Agent 必须提供最新的成功 `verify` 证据，才能接受最终回答。
+- **Workspace 边界**：原生文件工具只能访问项目资源，不会直接暴露 `.agentcore/` 或 workspace 外部文件。
+- **可追踪执行**：每次用户请求生成一份独立的 trajectory JSON，记录模型步骤、工具结果和验证状态。
+- **轻量实现**：运行时依赖只有 OpenAI SDK 和 python-dotenv，核心结构保持直接、可读。
 
-Context Manager 的顺序是 `预算测量 → ToolResult micro-compaction → 较旧完整 Run 的结构化摘要 → 重新测量`。Conversation 和 Run 保存的是完整 raw history，模型收到的是临时 model-facing context；缩减不会改写 trajectory。预算估算和摘要缓存目前只在本次进程内，持久 Session 和模型专用 tokenizer 留待后续阶段。
+## 快速开始
 
-## 支持的工具
+### 1. 准备环境
 
-| 工具 | 作用 |
-| --- | --- |
-| `list_files` | 列出目录内容 |
-| `read_file` | 读取 UTF-8 文件 |
-| `write_file` | 写入 UTF-8 文件 |
-| `edit_file` | 替换恰好出现一次的文本 |
-| `search` | 在文件中搜索字面字符串 |
-| `shell` | 在 workspace 目录执行命令 |
-| `git_diff` | 查看未暂存的 Git 改动 |
-
-原生文件工具通过 `AgentWorkspaceView` 访问 workspace。路径会先解析为 canonical path，再分类为 PROJECT、INTERNAL 或 OUTSIDE；工具只允许 PROJECT 资源。因此 `.agentcore/` 及指向它或 workspace 外部的符号链接不会出现在 listing/search 中，也不能被文件工具直接读写。trajectory writer 使用独立的 Workspace internal API，仍将记录写入 `.agentcore/trajectories/`。
-
-`shell` 通过 `LocalExecutionBackend` 在 workspace root 中执行并保留原有超时和输出语义。该 backend 不提供操作系统级隔离，所以 shell 命令仍可能读取 `.agentcore/` 或 workspace 外部资源；后续需要由真正的 sandbox execution backend 解决。
-
-## 安装与配置
-
-需要 Python 3.12+ 和 uv。在 `my_coding_agent/` 项目目录运行：
+需要安装 [Python 3.12+](https://www.python.org/) 和 [uv](https://docs.astral.sh/uv/)。在项目根目录执行：
 
 ```bash
 uv sync
 ```
 
-在环境变量或项目目录的 `.env` 中设置：
+### 2. 配置模型
 
-```text
-OPENAI_API_KEY=你的 API key
-OPENAI_MODEL=你可用的模型 ID
+在项目根目录创建 `.env`：
+
+```dotenv
+OPENAI_API_KEY=your-api-key
+OPENAI_MODEL=your-model-id
 ```
 
-`.env` 已被 Git 忽略。不要把真实密钥写入仓库文件。
+`.env` 已被 Git 忽略。请勿将真实 API key 提交到仓库。
 
-## 使用
+### 3. 启动 Trouvaille
+
+让 Agent 操作当前目录：
+
+```bash
+uv run trouvaille
+```
+
+更常见的方式是显式指定需要操作的项目：
+
+```bash
+uv run trouvaille --workspace /path/to/your/project
+```
+
+启动后直接输入任务：
+
+```text
+User > 找到计算总价的逻辑，修复折扣计算错误并运行测试
+```
+
+输入 `exit` 或 `quit` 退出。
+
+## 使用方式
+
+### 交互模式
+
+```bash
+# 新建会话
+uv run trouvaille --workspace /path/to/project
+
+# 从列表中选择历史 Session
+uv run trouvaille --workspace /path/to/project --resume
+
+# 恢复指定 Session
+uv run trouvaille --workspace /path/to/project --resume <session-id>
+
+# 恢复最近更新的 Session
+uv run trouvaille --workspace /path/to/project --continue
+
+# 调整每个 Run 的最大模型调用次数，CLI 默认值为 30
+uv run trouvaille --workspace /path/to/project --max-steps 50
+```
+
+同一次 CLI 启动中的多次输入共享 conversation history。Session 保存到目标 workspace 的 `.agentcore/sessions/`，使用 `--resume` 或 `--continue` 可以在下次启动时继续。
+
+### 单次任务
+
+```bash
+uv run trouvaille \
+  --workspace /path/to/project \
+  --task "分析这个项目的入口和主要模块"
+```
+
+`--task` 执行一个 Run 后退出，并生成 trajectory；它不会创建或更新 Session，也不能与 `--resume`、`--continue` 一起使用。
+
+查看全部参数：
 
 ```bash
 uv run trouvaille --help
-uv run trouvaille
-uv run trouvaille --resume
-uv run trouvaille --resume <session-id>
-uv run trouvaille --continue
 ```
 
-在 `User >` 输入任务；同一次启动中连续输入的任务共享完整对话历史。普通启动总是创建新的空 Session；只有 `--resume` 或 `--continue` 会恢复历史。无参数的 `--resume` 打开当前 workspace 的交互式 picker，`--resume <session-id>` 精确恢复指定 Session，`--continue` 恢复最近更新的 Session。Session 保存在 `<workspace>/.agentcore/sessions/`，启动后直接 `exit` 不会生成空文件。
+## 工作原理
 
-输入 `exit` 或 `quit` 退出。也可以指定 workspace 并运行单次任务：
+```mermaid
+flowchart TD
+    U[User task] --> CLI[CLI]
+    CLI --> C[Conversation]
+    S[(SessionStore)] <--> C
+    C --> A[Agent Loop]
+    A --> H[Lifecycle Hooks]
+    H --> R[Repository Context]
+    R --> X[Context Manager]
+    X --> M[OpenAI Model]
+    M --> A
+    A --> T[Tool Registry]
+    T --> I[Repository Index]
+    T --> W[Workspace / ExecutionBackend]
+    I --> A
+    W --> A
+    A --> V[Completion Verification]
+    A --> TS[Task State]
+    A --> J[(Trajectory JSON)]
+```
+
+一次用户请求称为一个 **Run**。一个 Run 可以包含多次模型调用和工具调用，并受 `max_steps` 限制。Agent 得到候选最终回答后，会先经过 completion verification；满足完成条件后才结束本次 Run。
+
+### 三种记录各自负责什么
+
+| 部件 | 保存范围 | 用途 |
+| --- | --- | --- |
+| Conversation / Session | 多个 Run 的完整 raw message history | 让后续请求理解此前对话；Session 支持跨进程恢复 |
+| Model-facing context | 当前一次 model call 的临时消息视图 | 注入 repo map、控制上下文预算，不改写原始历史 |
+| Trajectory | 单个 Run 的执行记录 | 审计本次模型步骤、工具调用、验证结果和最终状态 |
+
+Repository Context 先注入一份与当前任务相关、具有严格字符预算的 repo map，Context Manager 再根据真实上下文开销进行压缩。临时 repo map、压缩内容和被 verification 拒绝的候选回答不会写入持久 Session。
+
+## 内置工具
+
+| 类别 | 工具 | 作用 |
+| --- | --- | --- |
+| 文件 | `list_files` | 列出 workspace 内的目录内容 |
+| 文件 | `read_file` | 读取 UTF-8 文件 |
+| 文件 | `write_file` | 写入 UTF-8 文件 |
+| 文件 | `edit_file` | 替换恰好出现一次的文本 |
+| 搜索 | `search` | 在文件中搜索字面字符串 |
+| 仓库 | `repo_map` | 查看有界的结构化 repository map |
+| 仓库 | `find_symbol` | 按 qualified name 或短名称查找 Python symbol |
+| 仓库 | `find_references` | 查找有界的 syntactic identifier references |
+| 执行 | `shell` | 在 workspace 根目录执行命令 |
+| 执行 | `verify` | 运行显式验证命令并记录完成证据 |
+| Git | `git_diff` | 查看已跟踪文件的未暂存改动 |
+
+Repository Index 在 Git 仓库中优先通过 `git ls-files` 发现 tracked 和 untracked 文件，并遵守 `.gitignore`；非 Git 目录使用带常见 generated/vendor 排除项的安全遍历。所有候选路径最终仍需通过 `AgentWorkspaceView` 的资源边界检查。
+
+Python 文件通过标准库 `ast` 提取 class、function、method、async symbol、signature、imports 和 syntactic references。repo map 用于定位代码，Agent 在修改前仍应通过 `read_file` 查看精确源码。
+
+## 运行数据
+
+Trouvaille 在目标 workspace 中维护以下内部数据：
+
+```text
+<workspace>/.agentcore/
+├── sessions/       # 可恢复的完整对话历史
+└── trajectories/   # one Run → one JSON 执行记录
+```
+
+`.agentcore/` 是运行时内部目录。原生文件工具无法直接访问它，但 SessionStore 和 trajectory writer 可以通过专用内部接口写入。trajectory 可能包含用户任务、模型回答和工具返回的源码内容，请按本地敏感数据处理。
+
+## 项目结构
+
+```text
+.
+├── src/trouvaille/
+│   ├── agent.py          # Agent Loop 与 Run 生命周期
+│   ├── cli.py            # 命令行入口与终端展示
+│   ├── conversation.py   # 当前进程中的连续对话
+│   ├── session.py        # workspace 级持久 Session
+│   ├── context.py        # model-facing context 管理
+│   ├── repository.py     # AST index、ranking 与 repo map
+│   ├── lifecycle.py      # 同步生命周期扩展点
+│   ├── tools.py          # 工具定义与分发
+│   ├── workspace.py      # 资源边界
+│   ├── execution.py      # 命令执行后端
+│   ├── verification.py   # completion verification gate
+│   ├── task_state.py     # 当前 Run 的操作事实
+│   ├── trajectory.py     # 单 Run 执行记录
+│   ├── messages.py       # 内部 Message / ToolCall 结构
+│   └── model.py          # OpenAI Responses API 适配
+├── docs/assets/            # README 品牌资源
+├── pyproject.toml          # 包配置与 CLI entry point
+└── uv.lock                 # 可复现的依赖锁文件
+```
+
+## 开发检查
+
+以下检查不需要调用真实 API：
 
 ```bash
-uv run trouvaille --workspace /path/to/workspace --max-steps 10 --task "描述这个项目"
+uv run trouvaille --help
+uv run python -m compileall -q src
 ```
 
-CLI 显示 step、工具调用与结果、最终回答。每个 Run 的 JSON 记录单独写到 `<workspace>/.agentcore/trajectories/`，只记录本次 Run 的模型响应、工具调用与结果、状态和最终回答，不重复保存此前 Run 的步骤；记录可能包含任务文件内容，请按本地数据处理。
+## 安全边界
 
-`--task` 是一次性 Run，只写 trajectory，不创建或更新 Session，也不能与 `--resume`、`--continue` 同时使用。Session 使用同目录临时文件和原子替换保存；多个进程同时修改同一个 Session 时不保证自动合并。
+- `list_files`、`read_file`、`write_file`、`edit_file` 和 `search` 只能访问 workspace 内的 PROJECT 资源。
+- `.agentcore/`、workspace 外部路径以及指向这些位置的符号链接不会暴露给原生文件工具。
+- `shell` 与 `verify` 复用同一个 `LocalExecutionBackend`，当前没有操作系统级 sandbox 或命令审批。
+- 因此请只在受信任的 workspace 中运行，并在提交前检查 Agent 产生的修改。
 
-## Demo 与测试
+## 当前限制
 
-`demo_workspace/` 是独立样例：一个 `add` 函数有错误，测试期望正确加法。以下命令复制样例到项目内的临时目录，建立临时 Git 基线，再让真实模型查看文件、修复、运行测试、查看 diff 并回答；临时目录在运行结束后清理。
+- 当前仅支持 OpenAI provider。
+- Verification v1 检查的是显式执行证据，不会独立判断业务语义是否正确；验证命令由模型选择。
+- Verification v1 只跟踪原生 `write_file` / `edit_file` 修改，通过 `shell` 改动文件可能不会让旧证据失效。
+- Repository Intelligence v1 只解析 Python AST；references 是 syntactic best effort，不具备 LSP、类型推断或动态调用解析能力。
+- Repository Index 只做进程内增量缓存，不会持久化。
+- 当前没有长期记忆、planner、subagent、Web UI、IDE 扩展或进程 sandbox。
 
-```bash
-uv run python demo/run_demo.py
-```
+## 项目状态
 
-Demo 需要上述 API 配置，会产生真实模型请求。无需 API 的本地测试：
-
-```bash
-uv run python -m unittest discover -v
-```
-
-## 当前限制与后续方向
-
-当前只有 OpenAI provider；没有权限审批或进程沙箱，`LocalExecutionBackend` 下的 `shell` 可以访问 `.agentcore/` 和 workspace 以外的路径。`git_diff` 只显示已跟踪文件的未暂存改动。对话历史只在当前 CLI 进程内存在，不支持跨进程恢复；完整历史会不断增长，目前没有上下文压缩或 token 预算管理。也没有长期记忆、planner、subagent、Web UI 或 IDE 扩展。后续增强需单独设计与确认。
+Trouvaille 已具备一个基础 Coding Agent 的完整主链路，当前重点是保持核心简单、明确、可测试，再逐步扩展更强的安全控制、模型支持和工程能力。

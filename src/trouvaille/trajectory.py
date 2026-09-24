@@ -26,6 +26,20 @@ def save_trajectory(task: str, workspace: Workspace, result: RunResult) -> Path:
                 "result": json.loads(message.content),
             })
 
+    completion_checks = [asdict(check) for check in result.completion_checks]
+    verification_commands = [
+        asdict(command) for command in result.state.commands if command.tool == "verify"
+    ]
+    final_verification = None
+    for check in reversed(result.completion_checks):
+        if check.status is not None:
+            final_verification = {
+                "status": check.status,
+                "allowed": check.allowed,
+                "reason": check.reason,
+            }
+            break
+
     record = {
         "task": task,
         "workspace": str(workspace.root),
@@ -33,6 +47,9 @@ def save_trajectory(task: str, workspace: Workspace, result: RunResult) -> Path:
         "model_calls": result.steps,
         "task_state": asdict(result.state),
         "steps": steps,
+        "verification_commands": verification_commands,
+        "completion_checks": completion_checks,
+        "verification": final_verification,
         "final_answer": result.final_answer,
         "error": result.error,
     }

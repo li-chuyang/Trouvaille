@@ -5,6 +5,7 @@ from subprocess import TimeoutExpired
 from typing import Any, Callable
 
 from trouvaille.execution import ExecutionBackend, LocalExecutionBackend
+from trouvaille.repository import RepoMapBuilder, RepositoryIndex
 from trouvaille.workspace import AgentWorkspaceView, Workspace
 
 
@@ -78,11 +79,35 @@ def default_tools(
     *,
     shell_timeout: int = 30,
     execution_backend: ExecutionBackend | None = None,
+    repository: RepositoryIndex | None = None,
 ) -> ToolRegistry:
     if shell_timeout <= 0:
         raise ValueError("shell_timeout must be positive")
     agent_workspace = AgentWorkspaceView(workspace)
     backend = execution_backend if execution_backend is not None else LocalExecutionBackend()
+    repository_index = (
+        repository
+        if repository is not None
+        else RepositoryIndex(workspace, backend)
+    )
+    repo_map_builder = RepoMapBuilder(repository_index.config)
+
+    def execute_command(name: str, command: str) -> ToolResult:
+        completed = backend.run(
+            command,
+            cwd=workspace.root,
+            timeout=shell_timeout,
+            shell=True,
+        )
+        return ToolResult(
+            name=name,
+            ok=completed.exit_code == 0,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            exit_code=completed.exit_code,
+            output=completed.stdout + completed.stderr,
+            error=None if completed.exit_code == 0 else f"Exit code: {completed.exit_code}",
+        )
 
     def list_files(path: str = ".") -> ToolResult:
         names = [entry.name + ("/" if entry.is_dir() else "") for entry in agent_workspace.iterdir(path)]
@@ -123,21 +148,10 @@ def default_tools(
         return ToolResult(name="search", ok=True, output="\n".join(matches))
 
     def shell(command: str) -> ToolResult:
-        completed = backend.run(
-            command,
-            cwd=workspace.root,
-            timeout=shell_timeout,
-            shell=True,
-        )
-        return ToolResult(
-            name="shell",
-            ok=completed.exit_code == 0,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
-            exit_code=completed.exit_code,
-            output=completed.stdout + completed.stderr,
-            error=None if completed.exit_code == 0 else f"Exit code: {completed.exit_code}",
-        )
+        return execute_command("shell", command)
+
+    def verify(command: str) -> ToolResult:
+        return execute_command("verify", command)
 
     def git_diff(path: str = ".") -> ToolResult:
         target = agent_workspace.resolve(path)
@@ -158,6 +172,42 @@ def default_tools(
             error=None if completed.exit_code == 0 else f"Exit code: {completed.exit_code}",
         )
 
+    def repo_map() -> ToolResult:
+        snapshot = repository_index.refresh()
+        rendered = repo_map_builder.build(
+            snapshot,
+            max_chars=repository_index.config.tool_repo_map_max_chars,
+        )
+        return ToolResult(name="repo_map", ok=True, output=rendered.text)
+
+    def find_symbol(name: str) -> ToolResult:
+        snapshot = repository_index.refresh()
+        matches = repository_index.find_symbols(name, snapshot)
+        limit = repository_index.config.lookup_result_limit
+        selected = matches[:limit]
+        lines = [
+            f"{item.path}:{item.line}  {item.qualified_name}  {item.kind}  {item.signature}"
+            for item in selected
+        ]
+        if len(matches) > limit:
+            lines.append(f"[Results truncated: showing {limit} of {len(matches)} symbol matches]")
+        if not lines:
+            lines.append(f"No symbol definitions found for {name!r}.")
+        return ToolResult(name="find_symbol", ok=True, output="\n".join(lines))
+
+    def find_references(name: str) -> ToolResult:
+        snapshot = repository_index.refresh()
+        matches = repository_index.find_references(name, snapshot)
+        limit = repository_index.config.lookup_result_limit
+        selected = matches[:limit]
+        lines = ["[Syntactic references — best effort, not semantic/LSP references]"]
+        lines.extend(f"{item.path}:{item.line}  {item.form}" for item in selected)
+        if len(matches) > limit:
+            lines.append(f"[Results truncated: showing {limit} of {len(matches)} references]")
+        elif not selected:
+            lines.append(f"No syntactic references found for {name!r}.")
+        return ToolResult(name="find_references", ok=True, output="\n".join(lines))
+
     return ToolRegistry([
         Tool("list_files", "List entries in a workspace directory.", _parameters((), ("path",)), list_files),
         Tool("read_file", "Read a UTF-8 workspace file.", _parameters(("path",)), read_file),
@@ -165,5 +215,9 @@ def default_tools(
         Tool("edit_file", "Replace one exact text match in a UTF-8 workspace file.", _parameters(("path", "old_text", "new_text")), edit_file),
         Tool("search", "Find a literal string in workspace files.", _parameters(("pattern",), ("path",)), search),
         Tool("shell", "Run a shell command in the workspace.", _parameters(("command",)), shell),
+        Tool("verify", "Run an explicit verification command in the workspace.", _parameters(("command",)), verify),
         Tool("git_diff", "Show unstaged Git changes in the workspace.", _parameters((), ("path",)), git_diff),
+        Tool("repo_map", "Show a bounded structural repository map. Read exact source before editing.", _parameters(()), repo_map),
+        Tool("find_symbol", "Find Python symbol definitions by exact qualified or short name.", _parameters(("name",)), find_symbol),
+        Tool("find_references", "Find bounded best-effort syntactic identifier references.", _parameters(("name",)), find_references),
     ])
