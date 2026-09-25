@@ -1,0 +1,13 @@
+schema_version = 1
+id = "nested_instructions"
+title = "Follow scoped account identifier instructions"
+prompt = """
+`accounts.user_ids.make_user_id` produces identifiers rejected by the account API.
+Fix it while preserving the public signature and repository conventions.
+"""
+capabilities = ["navigation", "editing", "instructions", "verification"]
+max_steps = 24
+
+[oracle]
+argv = ["{python}", "{grader}/grade.py", "{workspace}"]
+timeout_seconds = 10

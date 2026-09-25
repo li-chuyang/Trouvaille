@@ -175,6 +175,12 @@ class RepositoryIndex:
     def snapshot(self) -> RepositorySnapshot | None:
         return self._snapshot
 
+    def visible_files(self) -> tuple[str, ...]:
+        """Return authorized project file paths without exposing index internals."""
+
+        paths, _, _ = self._discover_files()
+        return tuple(paths)
+
     def refresh(self) -> RepositorySnapshot:
         candidates, candidate_count, git_aware = self._discover_files()
         truncated = len(candidates) > self.config.max_indexed_files

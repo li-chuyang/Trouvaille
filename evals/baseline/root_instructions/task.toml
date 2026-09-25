@@ -1,0 +1,10 @@
+schema_version = 1
+id = "root_instructions"
+title = "Implement a project identifier using root instructions"
+prompt = "Implement `make_project_id` according to this project's conventions and keep its public signature."
+capabilities = ["editing", "instructions", "verification"]
+max_steps = 20
+
+[oracle]
+argv = ["{python}", "{grader}/grade.py", "{workspace}"]
+timeout_seconds = 10

@@ -1,0 +1,13 @@
+schema_version = 1
+id = "cross_file_contract"
+title = "Repair a caller/callee field contract"
+prompt = """
+Rendering a normalized user profile raises a KeyError. Preserve the documented
+`normalize_profile` result contract and repair the broken cross-file integration.
+"""
+capabilities = ["bugfix", "navigation", "cross-file", "verification"]
+max_steps = 24
+
+[oracle]
+argv = ["{python}", "{grader}/grade.py", "{workspace}"]
+timeout_seconds = 10

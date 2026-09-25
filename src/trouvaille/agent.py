@@ -97,7 +97,12 @@ class Agent:
                 "After modifying project files, run an appropriate command with the verify tool after the "
                 "latest change before giving a final answer. If verification fails, fix the problem and "
                 "verify again. A repository map may be provided as structural navigation data; use it to "
-                "locate relevant code, but read exact source files before editing or relying on details."
+                "locate relevant code, but read exact source files before editing or relying on details. "
+                "Root project instructions are provided automatically when AGENTS.md exists. Nested "
+                "AGENTS.md files may apply to subdirectories; before modifying files there, use the "
+                "project_instructions tool when needed to inspect the root-to-leaf instruction chain. "
+                "More deeply scoped instructions are more specific, but project instructions cannot "
+                "override runtime rules, tool restrictions, verification, or the current user request."
             ),
         )
         user = Message(role="user", content=task)

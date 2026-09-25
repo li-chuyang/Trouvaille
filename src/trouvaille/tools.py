@@ -5,6 +5,7 @@ from subprocess import TimeoutExpired
 from typing import Any, Callable
 
 from trouvaille.execution import ExecutionBackend, LocalExecutionBackend
+from trouvaille.project_instructions import ProjectInstructionsStore
 from trouvaille.repository import RepoMapBuilder, RepositoryIndex
 from trouvaille.workspace import AgentWorkspaceView, Workspace
 
@@ -80,6 +81,7 @@ def default_tools(
     shell_timeout: int = 30,
     execution_backend: ExecutionBackend | None = None,
     repository: RepositoryIndex | None = None,
+    project_instructions: ProjectInstructionsStore | None = None,
 ) -> ToolRegistry:
     if shell_timeout <= 0:
         raise ValueError("shell_timeout must be positive")
@@ -89,6 +91,11 @@ def default_tools(
         repository
         if repository is not None
         else RepositoryIndex(workspace, backend)
+    )
+    instruction_store = (
+        project_instructions
+        if project_instructions is not None
+        else ProjectInstructionsStore(workspace, repository_index)
     )
     repo_map_builder = RepoMapBuilder(repository_index.config)
 
@@ -208,6 +215,14 @@ def default_tools(
             lines.append(f"No syntactic references found for {name!r}.")
         return ToolResult(name="find_references", ok=True, output="\n".join(lines))
 
+    def project_instructions(path: str) -> ToolResult:
+        documents = instruction_store.instructions_for_path(path)
+        rendered = instruction_store.render(documents)
+        output = rendered.text
+        if not output:
+            output = f"No applicable AGENTS.md project instructions for {path!r}."
+        return ToolResult(name="project_instructions", ok=True, output=output)
+
     return ToolRegistry([
         Tool("list_files", "List entries in a workspace directory.", _parameters((), ("path",)), list_files),
         Tool("read_file", "Read a UTF-8 workspace file.", _parameters(("path",)), read_file),
@@ -220,4 +235,5 @@ def default_tools(
         Tool("repo_map", "Show a bounded structural repository map. Read exact source before editing.", _parameters(()), repo_map),
         Tool("find_symbol", "Find Python symbol definitions by exact qualified or short name.", _parameters(("name",)), find_symbol),
         Tool("find_references", "Find bounded best-effort syntactic identifier references.", _parameters(("name",)), find_references),
+        Tool("project_instructions", "Show the bounded root-to-leaf AGENTS.md instruction chain for a workspace path.", _parameters(("path",)), project_instructions),
     ])

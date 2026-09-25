@@ -15,18 +15,13 @@ except ImportError:
 
 from dotenv import load_dotenv
 
-from trouvaille.agent import Agent, AgentEvent
+from trouvaille.agent import AgentEvent
 from trouvaille.config import AppConfig
-from trouvaille.context import ContextManager, ModelContextSummarizer
 from trouvaille.conversation import Conversation
-from trouvaille.execution import LocalExecutionBackend
-from trouvaille.lifecycle import LifecycleHooks
 from trouvaille.model import ModelConfig, OpenAIModel
-from trouvaille.repository import RepositoryContextProvider, RepositoryIndex
+from trouvaille.runtime import build_runtime
 from trouvaille.session import Session, SessionError, SessionInfo, SessionStore
-from trouvaille.tools import default_tools
 from trouvaille.trajectory import save_trajectory
-from trouvaille.verification import EvidenceVerifier
 from trouvaille.workspace import Workspace
 
 
@@ -183,7 +178,20 @@ def _pick_session(store: SessionStore) -> Session:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="trouvaille", description="Trouvaille interactive coding agent")
+    parser = argparse.ArgumentParser(
+        prog="trouvaille",
+        description="Trouvaille interactive coding agent",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""evaluation commands:
+  trouvaille-eval list                         list built-in evaluation tasks
+  trouvaille-eval validate                     validate the evaluation suite without API calls
+  trouvaille-eval run --task simple_bugfix \\
+      --allow-local-execution                   evaluate the Agent on one controlled task
+  trouvaille-eval --help                        show all evaluation commands
+
+Evaluation is a separate developer benchmark. It does not run automatically after normal Agent tasks.
+""",
+    )
     parser.add_argument("--workspace", type=Path, default=Path.cwd(), help="Workspace directory (default: current directory)")
     parser.add_argument("--max-steps", type=int, default=30, help="Maximum model calls per task")
     parser.add_argument("--task", help="Run one task and exit instead of opening interactive mode")
@@ -238,26 +246,8 @@ def main() -> int:
     try:
         config = ModelConfig.from_env()
         model = OpenAIModel(config)
-        hooks = LifecycleHooks()
-        execution_backend = LocalExecutionBackend()
-        repository = RepositoryIndex(workspace, execution_backend)
-        repository_context = RepositoryContextProvider(repository)
-        context_manager = ContextManager(ModelContextSummarizer(model))
-        hooks.add_before_model(repository_context.prepare)
-        hooks.add_before_model(context_manager.prepare)
-        hooks.add_before_finish(EvidenceVerifier().check)
-        agent = Agent(
-            model,
-            default_tools(
-                workspace,
-                execution_backend=execution_backend,
-                repository=repository,
-            ),
-            workspace,
-            max_steps=args.max_steps,
-            hooks=hooks,
-        )
-        conversation = Conversation(agent, history=session.messages if session is not None else ())
+        runtime = build_runtime(workspace, model, max_steps=args.max_steps)
+        conversation = Conversation(runtime.agent, history=session.messages if session is not None else ())
     except (ValueError, OSError) as exc:
         print(f"Error > {exc}")
         return 2

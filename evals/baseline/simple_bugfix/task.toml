@@ -1,0 +1,13 @@
+schema_version = 1
+id = "simple_bugfix"
+title = "Clamp values to an inclusive range"
+prompt = """
+`calculator.clamp` returns incorrect values around and outside its bounds.
+Fix the implementation without changing its public signature.
+"""
+capabilities = ["bugfix", "editing", "verification"]
+max_steps = 20
+
+[oracle]
+argv = ["{python}", "{grader}/grade.py", "{workspace}"]
+timeout_seconds = 10

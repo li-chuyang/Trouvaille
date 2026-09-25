@@ -23,11 +23,13 @@ Trouvaille 接收自然语言任务，自主查看和修改代码、运行命令
 
 - **自主编码循环**：模型调用、工具执行、结果回填和停止条件都由项目自己的 Agent Loop 控制。
 - **连续对话与 Session**：同一次启动内共享完整消息历史，也可以跨进程恢复 workspace 中保存的会话。
+- **项目级指令**：自动加载根目录 `AGENTS.md`，并支持按文件路径查询 root-to-leaf 的嵌套指令链。
 - **Repository Intelligence**：安全发现仓库文件，使用 Python AST 建立索引，并按当前任务生成有界的 repo map。
 - **上下文管理**：针对每次模型调用生成临时上下文，压缩大型工具结果并摘要较旧的完整 Run。
 - **完成前验证**：修改文件后，Agent 必须提供最新的成功 `verify` 证据，才能接受最终回答。
 - **Workspace 边界**：原生文件工具只能访问项目资源，不会直接暴露 `.agentcore/` 或 workspace 外部文件。
 - **可追踪执行**：每次用户请求生成一份独立的 trajectory JSON，记录模型步骤、工具结果和验证状态。
+- **端到端评测**：用干净 fixture、独立外部 oracle、结构化 artifact 和 run comparison 测量完整 Coding Agent 能力。
 - **轻量实现**：运行时依赖只有 OpenAI SDK 和 python-dotenv，核心结构保持直接、可读。
 
 ## 快速开始
@@ -121,7 +123,8 @@ flowchart TD
     S[(SessionStore)] <--> C
     C --> A[Agent Loop]
     A --> H[Lifecycle Hooks]
-    H --> R[Repository Context]
+    H --> P[Project Instructions]
+    P --> R[Repository Context]
     R --> X[Context Manager]
     X --> M[OpenAI Model]
     M --> A
@@ -142,10 +145,14 @@ flowchart TD
 | 部件 | 保存范围 | 用途 |
 | --- | --- | --- |
 | Conversation / Session | 多个 Run 的完整 raw message history | 让后续请求理解此前对话；Session 支持跨进程恢复 |
-| Model-facing context | 当前一次 model call 的临时消息视图 | 注入 repo map、控制上下文预算，不改写原始历史 |
+| Model-facing context | 当前一次 model call 的临时消息视图 | 注入项目指令与 repo map、控制上下文预算，不改写原始历史 |
 | Trajectory | 单个 Run 的执行记录 | 审计本次模型步骤、工具调用、验证结果和最终状态 |
 
-Repository Context 先注入一份与当前任务相关、具有严格字符预算的 repo map，Context Manager 再根据真实上下文开销进行压缩。临时 repo map、压缩内容和被 verification 拒绝的候选回答不会写入持久 Session。
+Project Instructions Provider 先注入根目录 `AGENTS.md`，Repository Context 再注入一份与当前任务相关、具有严格字符预算的 repo map，Context Manager 最后根据二者的真实上下文开销进行压缩。自动指令、临时 repo map、压缩内容和被 verification 拒绝的候选回答不会写入持久 Session。
+
+根目录 `AGENTS.md` 适用于整个 workspace。嵌套目录可以提供更具体的 `AGENTS.md`；Agent 可通过 `project_instructions(path)` 按 root-to-leaf 顺序查询适用于目标文件的指令。项目指令不会自动执行其中的命令，也不能覆盖运行时边界、工具限制、Verification 或当前用户请求。
+
+Project Instructions 与 Repository Intelligence 保持分离：repo map 最多显示 `AGENTS.md` 路径，不包含其正文或用 ranking 决定指令优先级。`AGENTS.md` 中提到测试命令也只属于工作指导，只有实际调用 `verify` 产生的执行结果才算完成证据。
 
 ## 内置工具
 
@@ -159,6 +166,7 @@ Repository Context 先注入一份与当前任务相关、具有严格字符预�
 | 仓库 | `repo_map` | 查看有界的结构化 repository map |
 | 仓库 | `find_symbol` | 按 qualified name 或短名称查找 Python symbol |
 | 仓库 | `find_references` | 查找有界的 syntactic identifier references |
+| 指令 | `project_instructions` | 查询某个路径适用的 root-to-leaf `AGENTS.md` 指令链 |
 | 执行 | `shell` | 在 workspace 根目录执行命令 |
 | 执行 | `verify` | 运行显式验证命令并记录完成证据 |
 | Git | `git_diff` | 查看已跟踪文件的未暂存改动 |
@@ -166,6 +174,45 @@ Repository Context 先注入一份与当前任务相关、具有严格字符预�
 Repository Index 在 Git 仓库中优先通过 `git ls-files` 发现 tracked 和 untracked 文件，并遵守 `.gitignore`；非 Git 目录使用带常见 generated/vendor 排除项的安全遍历。所有候选路径最终仍需通过 `AgentWorkspaceView` 的资源边界检查。
 
 Python 文件通过标准库 `ast` 提取 class、function、method、async symbol、signature、imports 和 syntactic references。repo map 用于定位代码，Agent 在修改前仍应通过 `read_file` 查看精确源码。
+
+## Evaluation Harness
+
+`trouvaille-eval` 使用和正常 CLI 相同的 Runtime Builder，为每个任务复制一份全新的 fixture workspace、初始化独立 Git baseline、运行一次完整 Agent，再由 workspace 外部的 grader 判断最终功能。Agent 自己的 Verification 与外部 oracle 相互独立。
+
+先检查内置的 8 个开发基准任务，过程不调用模型 API：
+
+```bash
+uv run trouvaille-eval list --suite evals/baseline
+uv run trouvaille-eval validate --suite evals/baseline
+```
+
+真实模型评测会在本机通过 `LocalExecutionBackend` 执行模型选择的命令。当前没有安全 sandbox，因此只应运行仓库内受控 fixture，并且必须显式确认：
+
+```bash
+uv run trouvaille-eval run \
+  --suite evals/baseline \
+  --output eval_runs \
+  --allow-local-execution
+```
+
+开发时可以只跑一个任务、某类标签或前几个任务：
+
+```bash
+uv run trouvaille-eval run --suite evals/baseline \
+  --task simple_bugfix --allow-local-execution
+
+uv run trouvaille-eval run --suite evals/baseline \
+  --tag navigation --limit 2 --allow-local-execution
+```
+
+每次 attempt 保存 `result.json`、现有格式的 `trajectory.json`、`diff.patch` 和 `oracle.log`；run 目录保存元数据以及 JSON/Markdown 汇总。可以重新生成报告并比较两次运行的共同任务：
+
+```bash
+uv run trouvaille-eval report eval_runs/<run-dir>
+uv run trouvaille-eval compare eval_runs/<run-a> eval_runs/<run-b>
+```
+
+`functional_success` 表示外部 oracle 通过；`workflow_success` 还要求 Agent 正常完成 Run。因此，代码最终正确但耗尽 `max_steps` 时，前者可以为 true，后者为 false。单次真实模型运行只是一条开发信号，并非具有统计稳定性的能力估计。
 
 ## 运行数据
 
@@ -186,10 +233,14 @@ Trouvaille 在目标 workspace 中维护以下内部数据：
 ├── src/trouvaille/
 │   ├── agent.py          # Agent Loop 与 Run 生命周期
 │   ├── cli.py            # 命令行入口与终端展示
+│   ├── runtime.py        # CLI / Eval 共用的正常运行时装配
+│   ├── evaluation.py     # 任务、runner、oracle、结果、报告与比较
+│   ├── eval_cli.py       # 独立的开发评测 CLI
 │   ├── conversation.py   # 当前进程中的连续对话
 │   ├── session.py        # workspace 级持久 Session
 │   ├── context.py        # model-facing context 管理
 │   ├── repository.py     # AST index、ranking 与 repo map
+│   ├── project_instructions.py # AGENTS.md 发现、作用域与临时注入
 │   ├── lifecycle.py      # 同步生命周期扩展点
 │   ├── tools.py          # 工具定义与分发
 │   ├── workspace.py      # 资源边界
@@ -200,6 +251,7 @@ Trouvaille 在目标 workspace 中维护以下内部数据：
 │   ├── messages.py       # 内部 Message / ToolCall 结构
 │   └── model.py          # OpenAI Responses API 适配
 ├── docs/assets/            # README 品牌资源
+├── evals/baseline/         # 8 个受控 fixture 与 workspace 外部 grader
 ├── pyproject.toml          # 包配置与 CLI entry point
 └── uv.lock                 # 可复现的依赖锁文件
 ```
@@ -210,6 +262,8 @@ Trouvaille 在目标 workspace 中维护以下内部数据：
 
 ```bash
 uv run trouvaille --help
+uv run trouvaille-eval validate --suite evals/baseline
+uv run python -m unittest discover
 uv run python -m compileall -q src
 ```
 
@@ -227,6 +281,9 @@ uv run python -m compileall -q src
 - Verification v1 只跟踪原生 `write_file` / `edit_file` 修改，通过 `shell` 改动文件可能不会让旧证据失效。
 - Repository Intelligence v1 只解析 Python AST；references 是 syntactic best effort，不具备 LSP、类型推断或动态调用解析能力。
 - Repository Index 只做进程内增量缓存，不会持久化。
+- Project Instructions v1 仅支持 `AGENTS.md`；嵌套作用域需要模型显式调用工具查询，不会自动阻止不符合指令的编辑。
+- Evaluation v1 使用本机 `LocalExecutionBackend`，不提供容器隔离；内置 grader 位于 Agent workspace 外，但不是安全意义上的隐藏测试。
+- Evaluation 的 token、cost 指标目前没有从 Model adapter 暴露，因此结构化结果中保持 `null`。
 - 当前没有长期记忆、planner、subagent、Web UI、IDE 扩展或进程 sandbox。
 
 ## 项目状态

@@ -1,0 +1,13 @@
+schema_version = 1
+id = "integrated_scenario"
+title = "Repair invoice numbering and monetary totals"
+prompt = """
+Invoice summaries currently violate billing conventions and can round totals
+incorrectly. Repair the implementation while preserving the package API.
+"""
+capabilities = ["bugfix", "navigation", "cross-file", "editing", "instructions", "verification", "integrated"]
+max_steps = 30
+
+[oracle]
+argv = ["{python}", "{grader}/grade.py", "{workspace}"]
+timeout_seconds = 10

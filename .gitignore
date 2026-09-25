@@ -14,6 +14,7 @@ wheels/
 
 # Local run records
 .agentcore/
+eval_runs/
 
 # Temporary demo workspaces
 .demo-run-*/

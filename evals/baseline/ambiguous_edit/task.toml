@@ -1,0 +1,13 @@
+schema_version = 1
+id = "ambiguous_edit"
+title = "Edit the correct repeated expression"
+prompt = """
+Configuration keys should be case-insensitive after trimming. Configuration
+values should only be trimmed and must preserve their case. Fix the key behavior.
+"""
+capabilities = ["bugfix", "editing", "verification"]
+max_steps = 20
+
+[oracle]
+argv = ["{python}", "{grader}/grade.py", "{workspace}"]
+timeout_seconds = 10

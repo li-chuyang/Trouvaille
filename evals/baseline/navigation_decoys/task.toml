@@ -1,0 +1,13 @@
+schema_version = 1
+id = "navigation_decoys"
+title = "Find the free-shipping boundary bug"
+prompt = """
+Orders with a subtotal of exactly 50 should qualify for free standard shipping,
+but the checkout result is wrong. Find and fix the relevant implementation.
+"""
+capabilities = ["bugfix", "navigation", "verification"]
+max_steps = 24
+
+[oracle]
+argv = ["{python}", "{grader}/grade.py", "{workspace}"]
+timeout_seconds = 10

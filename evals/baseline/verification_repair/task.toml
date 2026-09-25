@@ -1,0 +1,13 @@
+schema_version = 1
+id = "verification_repair"
+title = "Repair mean calculation across edge cases"
+prompt = """
+`stats.mean` is inaccurate for some valid integer inputs. Fix it without
+changing the signature, then run the provided unit tests and any useful checks.
+"""
+capabilities = ["bugfix", "editing", "verification"]
+max_steps = 24
+
+[oracle]
+argv = ["{python}", "{grader}/grade.py", "{workspace}"]
+timeout_seconds = 10

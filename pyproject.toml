@@ -11,6 +11,7 @@ dependencies = [
 
 [project.scripts]
 trouvaille = "trouvaille.cli:main"
+trouvaille-eval = "trouvaille.eval_cli:main"
 
 [build-system]
 requires = ["uv_build>=0.9.27,<0.10.0"]
