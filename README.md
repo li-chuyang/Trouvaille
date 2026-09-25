@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/trouvaille-logo.svg" width="680" alt="Trouvaille">
+  <img src="docs/assets/trouvaille-cover.png" width="100%" alt="Trouvaille — local CLI coding agent">
 </p>
 
 <p align="center">
